@@ -30,6 +30,12 @@ import android.util.TypedValue;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
+
+import org.tensorflow.lite.examples.detection.BodyPart;
+import org.tensorflow.lite.examples.detection.KeyPoint;
+import org.tensorflow.lite.examples.detection.OffsetPosition;
+import org.tensorflow.lite.examples.detection.Person;
+import org.tensorflow.lite.examples.detection.Position;
 import org.tensorflow.lite.examples.detection.env.BorderedText;
 import org.tensorflow.lite.examples.detection.env.ImageUtils;
 import org.tensorflow.lite.examples.detection.env.Logger;
@@ -67,6 +73,43 @@ public class MultiBoxTracker {
   private int frameWidth;
   private int frameHeight;
   private int sensorOrientation;
+
+
+  final List<Pair<BodyPart, BodyPart>> bodyJoints = new LinkedList<Pair<BodyPart, BodyPart>>();
+
+  Pair pair1 = new Pair(BodyPart.LEFT_WRIST, BodyPart.LEFT_ELBOW);
+  Pair pair2 = new Pair(BodyPart.LEFT_ELBOW, BodyPart.LEFT_SHOULDER);
+  Pair pair3 = new Pair(BodyPart.LEFT_SHOULDER, BodyPart.RIGHT_SHOULDER);
+  Pair pair4 = new Pair(BodyPart.RIGHT_SHOULDER, BodyPart.RIGHT_ELBOW);
+  Pair pair5 = new Pair(BodyPart.RIGHT_ELBOW, BodyPart.RIGHT_WRIST);
+  Pair pair6 = new Pair(BodyPart.LEFT_SHOULDER, BodyPart.LEFT_HIP);
+  Pair pair7 = new Pair(BodyPart.LEFT_HIP, BodyPart.RIGHT_HIP);
+  Pair pair8 = new Pair(BodyPart.RIGHT_HIP, BodyPart.RIGHT_SHOULDER);
+  Pair pair9 = new Pair(BodyPart.LEFT_HIP, BodyPart.LEFT_KNEE);
+  Pair pair10 = new Pair(BodyPart.LEFT_KNEE, BodyPart.LEFT_ANKLE);
+  Pair pair11 = new Pair(BodyPart.RIGHT_HIP, BodyPart.RIGHT_KNEE);
+  Pair pair12 = new Pair(BodyPart.RIGHT_KNEE, BodyPart.RIGHT_ANKLE);
+
+  public void getBodyJoints(){
+    bodyJoints.add(pair1);
+    bodyJoints.add(pair2);
+    bodyJoints.add(pair3);
+    bodyJoints.add(pair4);
+    bodyJoints.add(pair5);
+    bodyJoints.add(pair6);
+    bodyJoints.add(pair7);
+    bodyJoints.add(pair8);
+    bodyJoints.add(pair9);
+    bodyJoints.add(pair10);
+    bodyJoints.add(pair11);
+    bodyJoints.add(pair12);
+  }
+
+  // keypoint得分阈值
+  private float minScore = 0.5f;
+  // 关键点的半径大小
+  private float circleRadius = 5.0f;
+
 
   public MultiBoxTracker(final Context context) {
     for (final int color : COLORS) {
@@ -111,9 +154,9 @@ public class MultiBoxTracker {
     }
   }
 
-  public synchronized void trackResults(final List<Recognition> results, final long timestamp) {
+  public synchronized void trackResults(final List<Recognition> results, List<Person> persons, final long timestamp) {
     logger.i("Processing %d results from %d", results.size(), timestamp);
-    processResults(results);
+    processResults(results, persons);
   }
 
   private Matrix getFrameToCanvasMatrix() {
@@ -134,6 +177,11 @@ public class MultiBoxTracker {
             (int) (multiplier * (rotated ? frameWidth : frameHeight)),
             sensorOrientation,
             false);
+
+    // 设置坐标换算比例
+    float scaleRatioX = canvas.getWidth() / 300.0f;
+    float scaleRatioY = (canvas.getWidth() * frameWidth/ frameHeight) / 300.0f;
+
     for (final TrackedRecognition recognition : trackedObjects) {
       final RectF trackedPos = new RectF(recognition.location);
 
@@ -142,6 +190,49 @@ public class MultiBoxTracker {
 
       float cornerSize = Math.min(trackedPos.width(), trackedPos.height()) / 8.0f;
       canvas.drawRoundRect(trackedPos, cornerSize, cornerSize, boxPaint);
+
+      // 设置对抠出的人像进行坐标换算的比例。换算后的坐标为300*300范围内的坐标值。
+      float sizeRatio = (recognition.scaleSize / 257.0f);
+
+//      画出特征点
+      List<KeyPoint> keyPoints = recognition.keyPoints;
+      for (final KeyPoint keypoint: keyPoints){
+        if(keypoint.getScore() > minScore){
+          Position position = keypoint.getPosition();
+          // 调整特征点的坐标，坐标值为300*300内的坐标。
+          float adjustedX = ((position.getX()*sizeRatio) + recognition.offset.getX());
+          float adjustedY = ((position.getY()*sizeRatio) + recognition.offset.getY());
+          canvas.drawCircle(
+                  adjustedX * scaleRatioX,
+                  adjustedY * scaleRatioY,
+                  circleRadius,
+                  boxPaint
+          );
+        }
+      }
+
+      // 身体连线
+//      getBodyJoints();
+//      float offsetX = recognition.offset.getX();
+//      float offsetY = recognition.offset.getY();
+//      for (final Pair<BodyPart, BodyPart> pair : bodyJoints){
+//        if((recognition.keyPoints.get(pair.first.ordinal()).getScore() > minScore)
+//                && (recognition.keyPoints.get(pair.second.ordinal()).getScore() > minScore)
+//        ){
+//          float firstX = (recognition.keyPoints.get(pair.first.ordinal()).getPosition().getX());
+//          float firstY = (recognition.keyPoints.get(pair.first.ordinal()).getPosition().getY());
+//          float secondX = (recognition.keyPoints.get(pair.second.ordinal()).getPosition().getX());
+//          float secondY = (recognition.keyPoints.get(pair.second.ordinal()).getPosition().getY());
+//          canvas.drawLine(
+//                  (firstX*sizeRatio + offsetX) * scaleRatioX,
+//                  (firstY*sizeRatio + offsetY) * scaleRatioY,
+//                  (secondX*sizeRatio + offsetX) * scaleRatioX,
+//                  (secondY*sizeRatio + offsetY) * scaleRatioY,
+//                  boxPaint
+//
+//          );
+//        }
+//      }
 
       final String labelString =
           !TextUtils.isEmpty(recognition.title)
@@ -154,12 +245,14 @@ public class MultiBoxTracker {
     }
   }
 
-  private void processResults(final List<Recognition> results) {
+  private void processResults(final List<Recognition> results, final List<Person> persons) {
     final List<Pair<Float, Recognition>> rectsToTrack = new LinkedList<Pair<Float, Recognition>>();
+    final List<Pair<Recognition, Person>> personToTrack = new LinkedList<Pair<Recognition, Person>>();
 
     screenRects.clear();
     final Matrix rgbFrameToScreen = new Matrix(getFrameToCanvasMatrix());
 
+    int i = 0;
     for (final Recognition result : results) {
       if (result.getLocation() == null) {
         continue;
@@ -180,6 +273,9 @@ public class MultiBoxTracker {
       }
 
       rectsToTrack.add(new Pair<Float, Recognition>(result.getConfidence(), result));
+      personToTrack.add(new Pair<Recognition, Person>(result, persons.get(i)));
+
+      i++;
     }
 
     trackedObjects.clear();
@@ -188,17 +284,22 @@ public class MultiBoxTracker {
       return;
     }
 
+    int j = 0;
     for (final Pair<Float, Recognition> potential : rectsToTrack) {
       final TrackedRecognition trackedRecognition = new TrackedRecognition();
       trackedRecognition.detectionConfidence = potential.first;
       trackedRecognition.location = new RectF(potential.second.getLocation());
       trackedRecognition.title = potential.second.getTitle();
       trackedRecognition.color = COLORS[trackedObjects.size()];
+      trackedRecognition.keyPoints = persons.get(j).getKeyPoints();
+      trackedRecognition.offset = persons.get(j).getOffset();
+      trackedRecognition.scaleSize = persons.get(j).getScaleSize();
       trackedObjects.add(trackedRecognition);
 
       if (trackedObjects.size() >= COLORS.length) {
         break;
       }
+      j++;
     }
   }
 
@@ -207,5 +308,8 @@ public class MultiBoxTracker {
     float detectionConfidence;
     int color;
     String title;
+    List<KeyPoint> keyPoints;
+    float scaleSize;
+    OffsetPosition offset;
   }
 }

@@ -23,6 +23,8 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Paint.Style;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.media.ImageReader.OnImageAvailableListener;
@@ -67,6 +69,7 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
   private Classifier detector;
 
   private long lastProcessingTimeMs;
+  private long time;
   private Bitmap rgbFrameBitmap = null;
   private Bitmap croppedBitmap = null;
   private Bitmap cropCopyBitmap = null;
@@ -81,6 +84,56 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
   private MultiBoxTracker tracker;
 
   private BorderedText borderedText;
+
+  private Posenet posenet;
+
+
+  // 白色填充
+  public Bitmap whiteEdgeBitmap(Bitmap bitmap) {
+    int w = bitmap.getWidth();
+    int h = bitmap.getHeight();
+    int size = h>w ? h : w;
+    // 背图
+    Bitmap newBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+    Canvas canvas = new Canvas(newBitmap);
+    Paint paint = new Paint();
+    paint.setAntiAlias(true);
+    canvas.drawARGB(0, 0, 0, 0);
+    // 生成白色
+    paint.setColor(Color.WHITE);
+    // 填充
+    canvas.drawBitmap(bitmap, 0, 0, paint);
+    paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_ATOP));
+    canvas.drawRect(0,0, size, size, paint);
+
+    return newBitmap;
+  }
+
+
+  // 提取人像，转换成257*257的bitmap
+  public Bitmap transBitmap(Bitmap bitmap, RectF location){
+    float locW = location.width();
+    float locH =  location.height();
+    float locL = location.left;
+    float locT = location.top;
+    float imgHeight = bitmap.getHeight();
+    float imgWight = bitmap.getWidth();
+    //
+    int left = (locL >= 0 ? (int)Math.ceil(locL) : 0);
+    int top = (locT >= 0 ? (int)Math.ceil(locT) : 0);
+    int w = (int) (left+locW <= imgWight ? locW : imgWight-left);
+    int h = (int) (top+locH <= imgHeight ? locH : imgHeight-top);
+
+    Bitmap cropbitmap = Bitmap.createBitmap(bitmap, left, top, w, h);
+    if(SAVE_PREVIEW_BITMAP){
+      ImageUtils.saveBitmap(cropbitmap, "bitmapCut.png");
+    }
+    // 白色填充截图其余部分，缩放，得到257*257的图
+    Bitmap whiteGapBitmap = whiteEdgeBitmap(cropbitmap);
+    Bitmap newbitmap = Bitmap.createScaledBitmap(whiteGapBitmap, 257, 257, true);
+
+    return newbitmap;
+  }
 
   @Override
   public void onPreviewSizeChosen(final Size size, final int rotation) {
@@ -197,20 +250,45 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
 
             final List<Classifier.Recognition> mappedRecognitions =
                 new LinkedList<Classifier.Recognition>();
+            //用于保存所有的人像信息。特征点
+            final List<Person> persons = new LinkedList<Person>();
 
             for (final Classifier.Recognition result : results) {
               final RectF location = result.getLocation();
-              if (location != null && result.getConfidence() >= minimumConfidence) {
+              final String title = result.getTitle();
+              if (location != null && result.getConfidence() >= minimumConfidence && title.equals("person")) {
                 canvas.drawRect(location, paint);
 
-                cropToFrameTransform.mapRect(location);
-
-                result.setLocation(location);
+                //识别人像，将其信息放入mappedRecognitions中
+                RectF scaleLocation = new RectF(location);
+                cropToFrameTransform.mapRect(scaleLocation);
+                result.setLocation(scaleLocation);
                 mappedRecognitions.add(result);
+
+                // 保存图像，用于分析
+                if (SAVE_PREVIEW_BITMAP) {
+                  ImageUtils.saveBitmap(croppedBitmap);
+                }
+
+                // 得到白色填充后的图像
+                Bitmap bitmapPadding = transBitmap(cropCopyBitmap, location);
+                //对croppedBitmap进行缩放，变成257*257的图
+                Bitmap bitmap257 = Bitmap.createScaledBitmap(croppedBitmap, 257,257,true);
+
+                // 获取人物大小，用于后期坐标换算
+                float w = location.width();
+                float h = location.height();
+                float scaleSize = h > w ? h : w;
+
+                final long start = SystemClock.uptimeMillis();
+                posenet = new Posenet(DetectorActivity.super.getApplicationContext(),"posenet_model.tflite", Device.CPU);
+                Person person = posenet.estimateSinglePose(bitmapPadding, scaleSize, location);
+                persons.add(person);
+                time = SystemClock.uptimeMillis() - start;
               }
             }
 
-            tracker.trackResults(mappedRecognitions, currTimestamp);
+            tracker.trackResults(mappedRecognitions, persons, currTimestamp);
             trackingOverlay.postInvalidate();
 
             computingDetection = false;
@@ -221,7 +299,8 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
                   public void run() {
                     showFrameInfo(previewWidth + "x" + previewHeight);
                     showCropInfo(cropCopyBitmap.getWidth() + "x" + cropCopyBitmap.getHeight());
-                    showInference(lastProcessingTimeMs + "ms");
+//                    showInference(lastProcessingTimeMs + "ms");
+                    showInference(time + "ms");
                   }
                 });
           }

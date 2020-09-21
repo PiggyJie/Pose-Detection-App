@@ -17,6 +17,7 @@ package org.tensorflow.lite.examples.detection
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.RectF
 import android.os.SystemClock
 import android.util.Log
 import java.io.FileInputStream
@@ -59,9 +60,16 @@ class KeyPoint {
   var score: Float = 0.0f
 }
 
+class OffsetPosition(){
+  var x: Float = 0.0f
+  var y: Float = 0.0f
+}
+
 class Person {
   var keyPoints = listOf<KeyPoint>()
   var score: Float = 0.0f
+  var offset = OffsetPosition()
+  var scaleSize:Float = 0.0f
 }
 
 enum class Device {
@@ -194,7 +202,7 @@ class Posenet(
    *      person: a Person object containing data about keypoint locations and confidence scores
    */
   @Suppress("UNCHECKED_CAST")
-  fun estimateSinglePose(bitmap: Bitmap): Person {
+  fun estimateSinglePose(bitmap: Bitmap, scaleSize: Float, location: RectF): Person {
     val estimationStartTimeNanos = SystemClock.elapsedRealtimeNanos()
     val inputArray = arrayOf(initInputArray(bitmap))
     Log.i(
@@ -272,6 +280,9 @@ class Posenet(
 
     person.keyPoints = keypointList.toList()
     person.score = totalScore / numKeypoints
+    person.offset.x = location.left
+    person.offset.y = location.top
+    person.scaleSize = scaleSize
 
     return person
   }
